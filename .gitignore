@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Artifacts
+artifacts/
+*.ipa
+*.apk
+*.aab
+*.zip
+*.deb
+*.rpm
+*.AppImage
+*.exe
+*.dmg
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Temp
+tmp/
+temp/

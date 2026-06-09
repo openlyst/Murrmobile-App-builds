@@ -1,0 +1,388 @@
+name: Build Murrmobile
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to build (comma-separated: ios,android,windows,linux,macos)'
+        required: false
+        type: string
+        default: 'ios,android,windows,linux,macos'
+      commit_hash:
+        description: 'Commit hash to build (leave empty for latest)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: 'stable'
+  APP_NAME: 'murrmobile'
+  REPO_URL: 'https://gitlab.com/HttpAnimations/Murrmobile-App.git'
+
+jobs:
+  # ============================================================================
+  # iOS BUILD (Unsigned IPA)
+  # ============================================================================
+  build-ios:
+    if: ${{ contains(github.event.inputs.platforms, 'ios') }}
+    runs-on: macos-latest
+    continue-on-error: true
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_date: ${{ steps.version.outputs.build_date }}
+      status: ${{ steps.status.outputs.status }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "start_time=$(date -Iseconds)" >> $GITHUB_OUTPUT
+
+      - name: Clone GitLab Repo
+        run: git clone ${{ env.REPO_URL }} .
+
+      - name: Checkout specific commit
+        if: ${{ github.event.inputs.commit_hash != '' }}
+        run: git checkout ${{ github.event.inputs.commit_hash }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get version from pubspec
+        id: version
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //g' | cut -d'+' -f1)
+          BUILD_DATE=$(date +%Y-%m-%d)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+      - name: Build iOS (No Code Signing)
+        run: |
+          flutter pub get
+          flutter build ios --release --no-codesign
+
+      - name: Create unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_date }}-ios-unsigned.ipa Payload/
+          rm -rf Payload
+
+      - name: Set status
+        id: status
+        if: always()
+        run: echo "status=${{ job.status }}" >> $GITHUB_OUTPUT
+
+      - name: Upload iOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-ios
+          path: ${{ env.APP_NAME }}-*-ios-unsigned.ipa
+
+  # ============================================================================
+  # ANDROID BUILD (APK + AAB)
+  # ============================================================================
+  build-android:
+    if: ${{ contains(github.event.inputs.platforms, 'android') }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_date: ${{ steps.version.outputs.build_date }}
+      status: ${{ steps.status.outputs.status }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "start_time=$(date -Iseconds)" >> $GITHUB_OUTPUT
+
+      - name: Clone GitLab Repo
+        run: git clone ${{ env.REPO_URL }} .
+
+      - name: Checkout specific commit
+        if: ${{ github.event.inputs.commit_hash != '' }}
+        run: git checkout ${{ github.event.inputs.commit_hash }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get version from pubspec
+        id: version
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //g' | cut -d'+' -f1)
+          BUILD_NUMBER=$(date +%s | cut -c4-10)
+          BUILD_DATE=$(date +%Y-%m-%d)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+      - name: Build APK
+        run: |
+          flutter pub get
+          flutter build apk --release --build-name=${{ steps.version.outputs.version }} --build-number=${{ steps.version.outputs.build_number }}
+          mv build/app/outputs/flutter-apk/app-release.apk ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_date }}.apk
+
+      - name: Build AAB
+        run: |
+          flutter build appbundle --release --build-name=${{ steps.version.outputs.version }} --build-number=${{ steps.version.outputs.build_number }}
+          mv build/app/outputs/bundle/release/app-release.aab ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_date }}.aab
+
+      - name: Set status
+        id: status
+        if: always()
+        run: echo "status=${{ job.status }}" >> $GITHUB_OUTPUT
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-android
+          path: |
+            ${{ env.APP_NAME }}-*.apk
+            ${{ env.APP_NAME }}-*.aab
+
+  # ============================================================================
+  # WINDOWS BUILD (ZIP)
+  # ============================================================================
+  build-windows:
+    if: ${{ contains(github.event.inputs.platforms, 'windows') }}
+    runs-on: windows-latest
+    continue-on-error: true
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_date: ${{ steps.version.outputs.build_date }}
+      status: ${{ steps.status.outputs.status }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "start_time=$(Get-Date -Format o)" >> $env:GITHUB_OUTPUT
+
+      - name: Clone GitLab Repo
+        run: git clone ${{ env.REPO_URL }} .
+
+      - name: Checkout specific commit
+        if: ${{ github.event.inputs.commit_hash != '' }}
+        run: git checkout ${{ github.event.inputs.commit_hash }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get version from pubspec
+        id: version
+        run: |
+          $VERSION = (Select-String -Path pubspec.yaml -Pattern "^version:" | ForEach-Object { $_.Line -replace "version: ", "" }).Split("+")[0].Trim()
+          $BUILD_DATE = Get-Date -Format "yyyy-MM-dd"
+          echo "version=$VERSION" >> $env:GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE" >> $env:GITHUB_OUTPUT
+
+      - name: Build Windows
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release --build-name=${{ steps.version.outputs.version }}
+
+      - name: Create ZIP
+        run: |
+          $VERSION = "${{ steps.version.outputs.version }}"
+          $DATE = "${{ steps.version.outputs.build_date }}"
+          $ZIP = "${{ env.APP_NAME }}-$VERSION-$DATE-windows-x64.zip"
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath $ZIP
+
+      - name: Set status
+        id: status
+        if: always()
+        run: echo "status=${{ job.status }}" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows
+          path: ${{ env.APP_NAME }}-*-windows-x64.zip
+
+  # ============================================================================
+  # LINUX BUILD (ZIP)
+  # ============================================================================
+  build-linux:
+    if: ${{ contains(github.event.inputs.platforms, 'linux') }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_date: ${{ steps.version.outputs.build_date }}
+      status: ${{ steps.status.outputs.status }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "start_time=$(date -Iseconds)" >> $GITHUB_OUTPUT
+
+      - name: Clone GitLab Repo
+        run: git clone ${{ env.REPO_URL }} .
+
+      - name: Checkout specific commit
+        if: ${{ github.event.inputs.commit_hash != '' }}
+        run: git checkout ${{ github.event.inputs.commit_hash }}
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get version from pubspec
+        id: version
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //g' | cut -d'+' -f1)
+          BUILD_DATE=$(date +%Y-%m-%d)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+      - name: Build Linux
+        run: |
+          flutter config --enable-linux-desktop
+          flutter pub get
+          flutter build linux --release --build-name=${{ steps.version.outputs.version }}
+
+      - name: Create ZIP
+        run: |
+          cd build/linux/x64/release
+          zip -r $GITHUB_WORKSPACE/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_date }}-linux-x64.zip bundle/
+
+      - name: Set status
+        id: status
+        if: always()
+        run: echo "status=${{ job.status }}" >> $GITHUB_OUTPUT
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-linux
+          path: ${{ env.APP_NAME }}-*-linux-x64.zip
+
+  # ============================================================================
+  # MACOS BUILD (Unsigned ZIP)
+  # ============================================================================
+  build-macos:
+    if: ${{ contains(github.event.inputs.platforms, 'macos') }}
+    runs-on: macos-latest
+    continue-on-error: true
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_date: ${{ steps.version.outputs.build_date }}
+      status: ${{ steps.status.outputs.status }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "start_time=$(date -Iseconds)" >> $GITHUB_OUTPUT
+
+      - name: Clone GitLab Repo
+        run: git clone ${{ env.REPO_URL }} .
+
+      - name: Checkout specific commit
+        if: ${{ github.event.inputs.commit_hash != '' }}
+        run: git checkout ${{ github.event.inputs.commit_hash }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get version from pubspec
+        id: version
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //g' | cut -d'+' -f1)
+          BUILD_DATE=$(date +%Y-%m-%d)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
+
+      - name: Build macOS (No Code Signing)
+        run: |
+          flutter config --enable-macos-desktop
+          flutter pub get
+          flutter build macos --release --build-name=${{ steps.version.outputs.version }}
+        env:
+          CODE_SIGNING_ALLOWED: "NO"
+          CODE_SIGNING_REQUIRED: "NO"
+
+      - name: Disable code signing in Xcode project
+        run: |
+          cd macos
+          /usr/libexec/PlistBuddy -c "Set :buildSettings:CODE_SIGN_IDENTITY ''" Runner.xcodeproj/project.pbxproj 2>/dev/null || true
+          xcodebuild -project Runner.xcodeproj -scheme Runner -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO -derivedDataPath ../build/macos_unsigned || true
+
+      - name: Create ZIP (unsigned)
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -r $GITHUB_WORKSPACE/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ steps.version.outputs.build_date }}-macos-unsigned.zip *.app
+
+      - name: Set status
+        id: status
+        if: always()
+        run: echo "status=${{ job.status }}" >> $GITHUB_OUTPUT
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-macos
+          path: ${{ env.APP_NAME }}-*-macos-unsigned.zip
+
+  # ============================================================================
+  # CREATE RELEASE
+  # ============================================================================
+  create-release:
+    needs: [build-ios, build-android, build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          sha256sum * > ../SHA256SUMS.txt
+
+      - name: Generate release notes
+        run: |
+          BUILD_DATE=$(date +%Y-%m-%d)
+          echo "# Murrmobile Build ${{ github.run_number }}" > release_notes.md
+          echo "" >> release_notes.md
+          echo "**Date:** $BUILD_DATE" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "## Artifacts" >> release_notes.md
+          echo "" >> release_notes.md
+          ls -la artifacts/ | tail -n +2 | awk '{print "- " $9 " (" $5 " bytes)"}' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "---" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "*Built from:* ${{ env.REPO_URL }}" >> release_notes.md
+          echo "*Commit:* ${{ github.event.inputs.commit_hash || 'latest' }}" >> release_notes.md
+          echo "*Triggered by:* @${{ github.actor }}" >> release_notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Murrmobile Build #${{ github.run_number }} - $(date +%Y-%m-%d)"
+          body_path: release_notes.md
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/*
+            SHA256SUMS.txt
